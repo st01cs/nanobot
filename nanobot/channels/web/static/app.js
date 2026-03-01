@@ -216,8 +216,7 @@ function sendMessageToAPI(message) {
 
 function streamResponse() {
     const eventSource = new EventSource(
-        `${API_BASE}/chat/stream?request_id=${currentRequestId}`,
-        { headers: { 'Authorization': `Bearer ${authToken}` } }
+        `${API_BASE}/chat/stream?request_id=${currentRequestId}&token=${authToken}`
     );
 
     eventSource.onopen = function() {

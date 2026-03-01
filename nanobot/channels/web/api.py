@@ -265,9 +265,19 @@ def create_app(
     @app.get("/api/chat/stream")
     async def stream_completion(
         request_id: str,
-        current_user: Annotated[TokenData, Depends(get_current_user)],
+        token: str | None = None,
     ):
         """Stream AI response via Server-Sent Events."""
+        # Verify token from URL parameter (EventSource doesn't support custom headers)
+        if not token:
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse("Missing token parameter", status_code=401)
+
+        try:
+            current_user = auth_manager.verify_access_token(token)
+        except ValueError:
+            yield "event: error\ndata: {\"error\": \"Invalid token\"}\n\n"
+            return
 
         async def event_stream():
             # Check authorization
