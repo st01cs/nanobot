@@ -36,6 +36,7 @@ class WebChannel(BaseChannel):
             db=self._db,
             secret=self.config.jwt_secret,
             allow_from=self.config.allow_from,
+            bus=self.bus,
             cors_origins=self.config.cors_origins,
         )
 

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from nanobot.bus.queue import MessageBus
 from nanobot.channels.web.auth import AuthManager, TokenData
 from nanobot.channels.web.database import WebDatabase
 
@@ -45,6 +46,7 @@ def create_app(
     db: WebDatabase,
     secret: str,
     allow_from: list[str],
+    bus: MessageBus,
     cors_origins: list[str] | None = None,
 ) -> FastAPI:
     """Create FastAPI application.
@@ -53,6 +55,7 @@ def create_app(
         db: Database instance
         secret: JWT secret key
         allow_from: Allowed usernames for registration (empty = open)
+        bus: Message bus for publishing inbound messages
         cors_origins: CORS allowed origins
 
     Returns:
@@ -202,6 +205,22 @@ def create_app(
             "session_id": session_id,
             "content": request.content,
         }
+
+        # Publish inbound message to bus
+        from nanobot.bus.events import InboundMessage
+        inbound_msg = InboundMessage(
+            channel="web",
+            sender_id=current_user.user_id,
+            chat_id=session_id,
+            content=request.content,
+            media=[],
+            metadata={
+                "request_id": request_id,
+                "username": current_user.username,
+            },
+            session_key_override=session_id,
+        )
+        await bus.publish_inbound(inbound_msg)
 
         return ChatResponse(
             request_id=request_id,
