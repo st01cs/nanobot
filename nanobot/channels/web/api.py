@@ -147,4 +147,93 @@ def create_app(
         """Get current user info."""
         return User(id=current_user.user_id, username=current_user.username)
 
+    # Chat models
+    class ChatRequest(BaseModel):
+        content: str = Field(min_length=1, max_length=10000)
+        session_id: str | None = None
+
+    class ChatResponse(BaseModel):
+        request_id: str
+        session_id: str
+        stream_url: str
+
+    class ChatMessage(BaseModel):
+        role: str
+        content: str
+        timestamp: str
+
+    class ChatHistory(BaseModel):
+        messages: list[ChatMessage]
+
+    # In-memory request tracking
+    pending_requests: dict[str, dict] = {}
+
+    @app.post("/api/chat/completions", response_model=ChatResponse, status_code=status.HTTP_202_ACCEPTED)
+    async def create_completion(
+        request: ChatRequest,
+        current_user: Annotated[TokenData, Depends(get_current_user)],
+        db: Annotated[WebDatabase, Depends(get_db)],
+    ):
+        """Send a message and start AI response stream."""
+        import uuid
+
+        # Get or create session
+        session_id = request.session_id
+        if not session_id:
+            session_id = await db.create_session(current_user.user_id)
+        else:
+            # Verify session belongs to user
+            session = await db.get_session(session_id)
+            if not session or session["user_id"] != current_user.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid session"
+                )
+
+        # Save user message
+        await db.add_message(session_id, "user", request.content)
+
+        # Create request ID
+        request_id = str(uuid.uuid4())
+        pending_requests[request_id] = {
+            "user_id": current_user.user_id,
+            "username": current_user.username,
+            "session_id": session_id,
+            "content": request.content,
+        }
+
+        return ChatResponse(
+            request_id=request_id,
+            session_id=session_id,
+            stream_url=f"/api/chat/stream?request_id={request_id}"
+        )
+
+    @app.get("/api/chat/history", response_model=ChatHistory)
+    async def get_history(
+        session_id: str,
+        current_user: Annotated[TokenData, Depends(get_current_user)],
+        db: Annotated[WebDatabase, Depends(get_db)],
+        limit: int = 100,
+    ):
+        """Get chat history for a session."""
+        # Verify session belongs to user
+        session = await db.get_session(session_id)
+        if not session or session["user_id"] != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid session"
+            )
+
+        messages = await db.get_messages(session_id, limit=limit)
+        return ChatHistory(
+            messages=[
+                ChatMessage(
+                    role=m["role"],
+                    content=m["content"],
+                    timestamp=m["timestamp"]
+                )
+                for m in messages
+            ]
+        )
+
     return app
