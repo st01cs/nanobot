@@ -11,6 +11,10 @@ from nanobot.channels.web.auth import AuthManager, TokenData
 from nanobot.channels.web.database import WebDatabase
 
 
+# In-memory request tracking for SSE streaming
+pending_requests: dict[str, dict] = {}
+
+
 # Request/Response models
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=20)
@@ -164,9 +168,6 @@ def create_app(
 
     class ChatHistory(BaseModel):
         messages: list[ChatMessage]
-
-    # In-memory request tracking
-    pending_requests: dict[str, dict] = {}
 
     @app.post("/api/chat/completions", response_model=ChatResponse, status_code=status.HTTP_202_ACCEPTED)
     async def create_completion(
