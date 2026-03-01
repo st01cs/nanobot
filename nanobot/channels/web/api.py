@@ -268,18 +268,18 @@ def create_app(
         token: str | None = None,
     ):
         """Stream AI response via Server-Sent Events."""
-        # Verify token from URL parameter (EventSource doesn't support custom headers)
-        if not token:
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse("Missing token parameter", status_code=401)
-
-        try:
-            current_user = auth_manager.verify_access_token(token)
-        except ValueError:
-            yield "event: error\ndata: {\"error\": \"Invalid token\"}\n\n"
-            return
 
         async def event_stream():
+            # Verify token from URL parameter (EventSource doesn't support custom headers)
+            if not token:
+                yield "event: error\ndata: {\"error\": \"Missing token parameter\"}\n\n"
+                return
+
+            try:
+                current_user = auth_manager.verify_access_token(token)
+            except ValueError:
+                yield "event: error\ndata: {\"error\": \"Invalid token\"}\n\n"
+                return
             # Check authorization
             if request_id not in pending_requests:
                 yield "event: error\ndata: {\"error\": \"Invalid request_id\"}\n\n"
