@@ -5,16 +5,17 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.web.auth import AuthManager, TokenData
 from nanobot.channels.web.database import WebDatabase
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import json
 import asyncio
-
+import os
 
 # In-memory request tracking for SSE streaming
 pending_requests: dict[str, dict] = {}
@@ -323,5 +324,17 @@ def create_app(
                 "Connection": "keep-alive",
             }
         )
+
+    # Static file serving
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", response_class=FileResponse)
+    async def index():
+        return FileResponse(os.path.join(static_dir, "index.html"))
+
+    @app.get("/chat", response_class=FileResponse)
+    async def chat_page():
+        return FileResponse(os.path.join(static_dir, "chat.html"))
 
     return app
