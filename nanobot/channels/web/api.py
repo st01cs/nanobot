@@ -11,6 +11,10 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.web.auth import AuthManager, TokenData
 from nanobot.channels.web.database import WebDatabase
 
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
+
 
 # In-memory request tracking for SSE streaming
 pending_requests: dict[str, dict] = {}
@@ -254,6 +258,70 @@ def create_app(
                 )
                 for m in messages
             ]
+        )
+
+    # SSE streaming endpoint
+    @app.get("/api/chat/stream")
+    async def stream_completion(
+        request_id: str,
+        current_user: Annotated[TokenData, Depends(get_current_user)],
+    ):
+        """Stream AI response via Server-Sent Events."""
+
+        async def event_stream():
+            # Check authorization
+            if request_id not in pending_requests:
+                yield "event: error\ndata: {\"error\": \"Invalid request_id\"}\n\n"
+                return
+
+            req_data = pending_requests[request_id]
+            if req_data["user_id"] != current_user.user_id:
+                yield "event: error\ndata: {\"error\": \"Unauthorized\"}\n\n"
+                return
+
+            # Wait for response
+            timeout = 120
+            check_interval = 0.1
+            elapsed = 0
+
+            while elapsed < timeout:
+                if request_id in pending_requests and "response" in pending_requests[request_id]:
+                    response = pending_requests[request_id]["response"]
+
+                    # Stream in chunks
+                    chunk_size = 10
+                    for i in range(0, len(response), chunk_size):
+                        chunk = response[i:i+chunk_size]
+                        data = json.dumps({"content": chunk, "done": False})
+                        yield f"event: message\ndata: {data}\n\n"
+                        await asyncio.sleep(0.02)
+
+                    # Done
+                    yield "event: done\ndata: {\"done\": true}\n\n"
+
+                    # Save to database
+                    session_id = pending_requests[request_id]["session_id"]
+                    await app.state.db.add_message(session_id, "assistant", response)
+
+                    # Cleanup
+                    del pending_requests[request_id]
+                    return
+
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+
+            # Timeout
+            yield "event: error\ndata: {\"error\": \"Request timeout\"}\n\n"
+            if request_id in pending_requests:
+                del pending_requests[request_id]
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
         )
 
     return app
