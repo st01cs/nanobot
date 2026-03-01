@@ -215,6 +215,17 @@ async function streamResponse(requestId) {
     );
 
     let assistantMessage = null;
+    let progressContainer = null;
+    let fullContent = '';
+
+    // Create progress container
+    progressContainer = appendProgressContainer();
+
+    eventSource.addEventListener('progress', (e) => {
+        const data = JSON.parse(e.data);
+        appendProgressItem(progressContainer, data.content, data.is_tool_hint, data.tool_calls);
+        scrollToBottom();
+    });
 
     eventSource.addEventListener('message', (e) => {
         const data = JSON.parse(e.data);
@@ -224,17 +235,29 @@ async function streamResponse(requestId) {
             assistantMessage = appendMessage('assistant', '');
         }
 
+        // Accumulate content during streaming
+        fullContent += data.content;
+
+        // Update with plain text during streaming for better performance
         if (assistantMessage) {
-            assistantMessage.textContent += data.content;
+            assistantMessage.textContent = fullContent;
             scrollToBottom();
         }
     });
 
     eventSource.addEventListener('done', () => {
+        // Render markdown after streaming is complete
+        if (assistantMessage && fullContent) {
+            renderMarkdown(assistantMessage, fullContent);
+        }
         eventSource.close();
     });
 
     eventSource.addEventListener('error', () => {
+        // Render markdown even on error
+        if (assistantMessage && fullContent) {
+            renderMarkdown(assistantMessage, fullContent);
+        }
         eventSource.close();
         if (!assistantMessage) {
             hideTypingIndicator();
@@ -251,7 +274,13 @@ function appendMessage(role, content, scroll = true) {
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    contentDiv.textContent = content;
+
+    // Render markdown for assistant messages
+    if (role === 'assistant') {
+        renderMarkdown(contentDiv, content);
+    } else {
+        contentDiv.textContent = content;
+    }
 
     messageDiv.appendChild(contentDiv);
     messagesDiv.appendChild(messageDiv);
@@ -259,6 +288,25 @@ function appendMessage(role, content, scroll = true) {
     if (scroll) scrollToBottom();
 
     return contentDiv;
+}
+
+/**
+ * Render markdown content safely with DOMPurify
+ * @param {HTMLElement} element - Target element to render into
+ * @param {string} content - Markdown content to render
+ */
+function renderMarkdown(element, content) {
+    // Configure marked options
+    marked.setOptions({
+        breaks: true,      // Convert \n to <br>
+        gfm: true,         // GitHub Flavored Markdown
+        headerIds: false,  // Don't generate header IDs
+        mangle: false      // Don't mangle email addresses
+    });
+
+    // Parse markdown and sanitize HTML
+    const html = DOMPurify.sanitize(marked.parse(content));
+    element.innerHTML = html;
 }
 
 function showTypingIndicator() {
@@ -281,6 +329,175 @@ function scrollToBottom() {
     if (messagesDiv) {
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
+}
+
+function appendProgressContainer() {
+    const messagesDiv = document.getElementById('messages');
+    if (!messagesDiv) return null;
+
+    const progressDiv = document.createElement('div');
+    progressDiv.className = 'progress-container';
+
+    const header = document.createElement('div');
+    header.className = 'progress-header';
+    header.textContent = '🔧 执行工具...';
+
+    const list = document.createElement('div');
+    list.className = 'progress-list';
+
+    progressDiv.appendChild(header);
+    progressDiv.appendChild(list);
+    messagesDiv.appendChild(progressDiv);
+
+    return progressDiv;
+}
+
+function appendProgressItem(container, content, isToolHint, toolCalls) {
+    if (!container) return;
+
+    const list = container.querySelector('.progress-list');
+    if (!list) return;
+
+    // If we have detailed tool_calls data, use it
+    if (isToolHint && toolCalls && toolCalls.length > 0) {
+        toolCalls.forEach(toolCall => {
+            const item = document.createElement('div');
+            item.className = 'progress-item';
+
+            const inner = document.createElement('div');
+            inner.style.display = 'flex';
+            inner.style.alignItems = 'flex-start';
+            inner.style.gap = '8px';
+
+            const icon = document.createElement('span');
+            icon.className = 'progress-icon';
+            icon.textContent = '⚡';
+
+            const text = document.createElement('span');
+            text.className = 'progress-text';
+            const argsStr = JSON.stringify(toolCall.arguments, null, 2);
+            text.textContent = `执行工具: ${toolCall.name}(${argsStr})`;
+
+            inner.appendChild(icon);
+            inner.appendChild(text);
+            item.appendChild(inner);
+            list.appendChild(item);
+        });
+    } else if (isToolHint) {
+        // Fallback: split by comma if we don't have detailed tool_calls
+        const toolHints = splitToolCalls(content);
+        toolHints.forEach(hint => {
+            const item = document.createElement('div');
+            item.className = 'progress-item';
+
+            const inner = document.createElement('div');
+            inner.style.display = 'flex';
+            inner.style.alignItems = 'flex-start';
+            inner.style.gap = '8px';
+
+            const icon = document.createElement('span');
+            icon.className = 'progress-icon';
+            icon.textContent = '⚡';
+
+            const text = document.createElement('span');
+            text.className = 'progress-text';
+            text.textContent = '执行工具: ' + hint;
+
+            inner.appendChild(icon);
+            inner.appendChild(text);
+            item.appendChild(inner);
+            list.appendChild(item);
+        });
+    } else {
+        // Simple progress item without tool hint
+        const item = document.createElement('div');
+        item.className = 'progress-item';
+
+        const inner = document.createElement('div');
+        inner.style.display = 'flex';
+        inner.style.alignItems = 'flex-start';
+        inner.style.gap = '8px';
+
+        const icon = document.createElement('span');
+        icon.className = 'progress-icon';
+        icon.textContent = '…';
+
+        const text = document.createElement('span');
+        text.className = 'progress-text';
+        text.textContent = content;
+
+        inner.appendChild(icon);
+        inner.appendChild(text);
+        item.appendChild(inner);
+        list.appendChild(item);
+    }
+}
+
+/**
+ * Split tool calls by comma, but only at the top level (outside parentheses/braces)
+ * This correctly handles tool calls with complex parameters like: {"pattern": "a, b"}
+ */
+function splitToolCalls(content) {
+    const result = [];
+    let current = '';
+    let depth = 0;  // Track nesting depth of parentheses/braces
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = 0; i < content.length; i++) {
+        const char = content[i];
+
+        if (escapeNext) {
+            current += char;
+            escapeNext = false;
+            continue;
+        }
+
+        if (char === '\\') {
+            current += char;
+            escapeNext = true;
+            continue;
+        }
+
+        if (char === '"' && !escapeNext) {
+            inString = !inString;
+            current += char;
+            continue;
+        }
+
+        if (inString) {
+            current += char;
+            continue;
+        }
+
+        // Track nesting depth
+        if (char === '(' || char === '{' || char === '[') {
+            depth++;
+            current += char;
+        } else if (char === ')' || char === '}' || char === ']') {
+            depth--;
+            current += char;
+        } else if (char === ',' && depth === 0) {
+            // Found separator at top level
+            if (current.trim()) {
+                result.push(current.trim());
+            }
+            current = '';
+            // Skip the space after comma
+            if (content[i + 1] === ' ') {
+                i++;
+            }
+        } else {
+            current += char;
+        }
+    }
+
+    // Add the last tool call
+    if (current.trim()) {
+        result.push(current.trim());
+    }
+
+    return result;
 }
 
 function logout() {

@@ -167,11 +167,11 @@ class AgentLoop:
     def _tool_hint(tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
         def _fmt(tc):
-            args = (tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments) or {}
-            val = next(iter(args.values()), None) if isinstance(args, dict) else None
-            if not isinstance(val, str):
-                return tc.name
-            return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+            # tc.arguments is already a dict (ToolCallRequest.arguments: dict[str, Any])
+            if tc.arguments:
+                args_str = json.dumps(tc.arguments, ensure_ascii=False)
+                return f'{tc.name}({args_str})'
+            return tc.name
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
     async def _run_agent_loop(
@@ -202,7 +202,15 @@ class AgentLoop:
                     clean = self._strip_think(response.content)
                     if clean:
                         await on_progress(clean)
-                    await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
+                    # Prepare tool call details for progress
+                    tool_calls_info = [
+                        {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+                        for tc in response.tool_calls
+                    ]
+                    await on_progress(self._tool_hint(response.tool_calls), tool_hint=True, tool_calls=tool_calls_info)
 
                 tool_call_dicts = [
                     {
@@ -421,10 +429,12 @@ class AgentLoop:
             channel=msg.channel, chat_id=msg.chat_id,
         )
 
-        async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
+        async def _bus_progress(content: str, *, tool_hint: bool = False, tool_calls: list | None = None) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
+            if tool_calls:
+                meta["_tool_calls"] = json.dumps(tool_calls, ensure_ascii=False)
             await self.bus.publish_outbound(OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))

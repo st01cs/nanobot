@@ -153,6 +153,55 @@ header h1 {
     padding: 20px;
 }
 
+/* Progress Container */
+.progress-container {
+    margin-bottom: 20px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 14px;
+}
+
+.progress-header {
+    font-weight: 600;
+    color: #6b7280;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.progress-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.progress-item {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 8px;
+    background: white;
+    border-radius: 4px;
+    border-left: 2px solid #d1d5db;
+}
+
+.progress-icon {
+    flex-shrink: 0;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.progress-text {
+    flex: 1;
+    color: #4b5563;
+    font-size: 13px;
+    line-height: 1.4;
+    word-break: break-word;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
 .message {
     margin-bottom: 20px;
     display: flex;
@@ -233,4 +282,145 @@ header h1 {
 
 .input-area button:hover {
     background: #5568d3;
+}
+
+/* Markdown Styles for Messages */
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+    margin-top: 1em;
+    margin-bottom: 0.5em;
+    font-weight: 600;
+}
+
+.message-content h1 { font-size: 1.5em; }
+.message-content h2 { font-size: 1.3em; }
+.message-content h3 { font-size: 1.15em; }
+.message-content h4 { font-size: 1.05em; }
+
+.message-content p {
+    margin-bottom: 0.75em;
+    line-height: 1.6;
+}
+
+.message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.message-content ul,
+.message-content ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+}
+
+.message-content li {
+    margin-bottom: 0.25em;
+    line-height: 1.6;
+}
+
+.message-content code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.9em;
+}
+
+.message.assistant .message-content code {
+    background: rgba(0, 0, 0, 0.08);
+    color: #e83e8c;
+}
+
+.message.user .message-content code {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+.message-content pre {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    margin: 0.75em 0;
+    overflow-x: auto;
+}
+
+.message.assistant .message-content pre {
+    background: #1e1e1e;
+    border-color: #333;
+}
+
+.message-content pre code {
+    background: transparent;
+    padding: 0.75em;
+    color: #24292e;
+    font-size: 0.85em;
+    line-height: 1.5;
+}
+
+.message.assistant .message-content pre code {
+    color: #e6edf3;
+}
+
+.message-content blockquote {
+    border-left: 4px solid #ddd;
+    padding-left: 1em;
+    margin: 0.75em 0;
+    color: #666;
+    font-style: italic;
+}
+
+.message.assistant .message-content blockquote {
+    border-left-color: rgba(0, 0, 0, 0.1);
+}
+
+.message-content a {
+    color: inherit;
+    text-decoration: underline;
+}
+
+.message.assistant .message-content a {
+    color: #667eea;
+}
+
+.message-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.75em 0;
+    font-size: 0.9em;
+}
+
+.message-content th,
+.message-content td {
+    border: 1px solid #ddd;
+    padding: 0.5em 0.75em;
+    text-align: left;
+}
+
+.message-content th {
+    background: #f6f8fa;
+    font-weight: 600;
+}
+
+.message-content hr {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 1em 0;
+}
+
+.message-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin: 0.5em 0;
+}
+
+.message-content strong {
+    font-weight: 600;
+}
+
+.message-content em {
+    font-style: italic;
 }

@@ -294,29 +294,47 @@ def create_app(
             timeout = 120
             check_interval = 0.1
             elapsed = 0
+            progress_sent = 0  # Track how many progress messages we've sent
 
             while elapsed < timeout:
-                if request_id in pending_requests and "response" in pending_requests[request_id]:
-                    response = pending_requests[request_id]["response"]
+                if request_id in pending_requests:
+                    req_data = pending_requests[request_id]
 
-                    # Stream in chunks
-                    chunk_size = 10
-                    for i in range(0, len(response), chunk_size):
-                        chunk = response[i:i+chunk_size]
-                        data = json.dumps({"content": chunk, "done": False})
-                        yield f"event: message\ndata: {data}\n\n"
-                        await asyncio.sleep(0.02)
+                    # Send progress messages if available
+                    if "progress" in req_data:
+                        progress_list = req_data["progress"]
+                        while progress_sent < len(progress_list):
+                            progress_item = progress_list[progress_sent]
+                            data = json.dumps({
+                                "content": progress_item["content"],
+                                "is_tool_hint": progress_item["is_tool_hint"],
+                                "tool_calls": progress_item.get("tool_calls"),
+                            })
+                            yield f"event: progress\ndata: {data}\n\n"
+                            progress_sent += 1
 
-                    # Done
-                    yield "event: done\ndata: {\"done\": true}\n\n"
+                    # Check if response is ready
+                    if "response" in req_data:
+                        response = req_data["response"]
 
-                    # Save to database
-                    session_id = pending_requests[request_id]["session_id"]
-                    await app.state.db.add_message(session_id, "assistant", response)
+                        # Stream in chunks
+                        chunk_size = 10
+                        for i in range(0, len(response), chunk_size):
+                            chunk = response[i:i+chunk_size]
+                            data = json.dumps({"content": chunk, "done": False})
+                            yield f"event: message\ndata: {data}\n\n"
+                            await asyncio.sleep(0.02)
 
-                    # Cleanup
-                    del pending_requests[request_id]
-                    return
+                        # Done
+                        yield "event: done\ndata: {\"done\": true}\n\n"
+
+                        # Save to database
+                        session_id = req_data["session_id"]
+                        await app.state.db.add_message(session_id, "assistant", response)
+
+                        # Cleanup
+                        del pending_requests[request_id]
+                        return
 
                 await asyncio.sleep(check_interval)
                 elapsed += check_interval

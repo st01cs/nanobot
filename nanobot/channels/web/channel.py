@@ -90,9 +90,34 @@ class WebChannel(BaseChannel):
             logger.warning("Outbound message missing request_id: {}", msg.metadata)
             return
 
+        # Check if this is a progress message
+        is_progress = msg.metadata.get("_progress", False)
+        is_tool_hint = msg.metadata.get("_tool_hint", False)
+        tool_calls_json = msg.metadata.get("_tool_calls")
+        tool_calls = None
+        if tool_calls_json:
+            import json
+            try:
+                tool_calls = json.loads(tool_calls_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         # Store response for SSE streaming
         if request_id in pending_requests:
-            pending_requests[request_id]["response"] = msg.content
-            pending_requests[request_id]["done"] = True
+            if is_progress:
+                # Append progress message
+                if "progress" not in pending_requests[request_id]:
+                    pending_requests[request_id]["progress"] = []
+                progress_item = {
+                    "content": msg.content,
+                    "is_tool_hint": is_tool_hint,
+                }
+                if tool_calls:
+                    progress_item["tool_calls"] = tool_calls
+                pending_requests[request_id]["progress"].append(progress_item)
+            else:
+                # Final response
+                pending_requests[request_id]["response"] = msg.content
+                pending_requests[request_id]["done"] = True
         else:
             logger.warning("Unknown request_id: {}", request_id)
