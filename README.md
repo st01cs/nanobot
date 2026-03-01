@@ -380,6 +380,47 @@ nanobot gateway
 </details>
 
 <details>
+<summary><b>Web</b></summary>
+
+Web-based chat interface with multi-user support and real-time streaming.
+
+**1. Install dependencies**
+
+```bash
+pip install nanobot-ai[web]
+```
+
+**2. Configure**
+
+```json
+{
+  "channels": {
+    "web": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 8080,
+      "jwtSecret": "your-secret-key-here",
+      "allowFrom": []
+    }
+  }
+}
+```
+
+> `allowFrom`: Leave empty to allow open registration, or add usernames to restrict access.
+
+**3. Run**
+
+```bash
+nanobot gateway
+```
+
+**4. Access**
+
+Open http://localhost:8080 in your browser.
+
+</details>
+
+<details>
 <summary><b>WhatsApp</b></summary>
 
 Requires **Node.js ≥18**.

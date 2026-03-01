@@ -10,6 +10,7 @@ from loguru import logger
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
+from nanobot.channels.web import WebChannel
 from nanobot.config.schema import Config
 
 
@@ -148,6 +149,14 @@ class ChannelManager:
                 logger.info("Matrix channel enabled")
             except ImportError as e:
                 logger.warning("Matrix channel not available: {}", e)
+
+        # Web channel
+        if self.config.channels.web.enabled:
+            try:
+                self.channels["web"] = WebChannel(self.config.channels.web, self.bus)
+                logger.info("Web channel enabled")
+            except Exception as e:
+                logger.error("Failed to initialize web channel: {}", e)
     
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""
