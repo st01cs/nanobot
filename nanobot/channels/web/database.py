@@ -79,6 +79,16 @@ class WebDatabase:
         if self._conn:
             await self._conn.close()
 
+    async def __aenter__(self) -> "WebDatabase":
+        """Async context manager entry."""
+        if self._conn is None:
+            await self.init()
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Async context manager exit."""
+        await self.close()
+
     # Password utilities
     @staticmethod
     async def hash_password(password: str) -> str:
@@ -95,7 +105,7 @@ class WebDatabase:
         """Create a new user. Returns user ID (UUID)."""
         user_id = str(uuid.uuid4())
         password_hash = await self.hash_password(password)
-        created_at = datetime.utcnow().isoformat()
+        created_at = datetime.now().isoformat()
 
         try:
             await self._conn.execute(
@@ -127,7 +137,7 @@ class WebDatabase:
     async def create_session(self, user_id: str) -> str:
         """Create a new chat session. Returns session ID (UUID)."""
         session_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now().isoformat()
 
         await self._conn.execute(
             "INSERT INTO sessions (id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
@@ -148,7 +158,7 @@ class WebDatabase:
         """Update session timestamp."""
         await self._conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), session_id)
+            (datetime.now().isoformat(), session_id)
         )
         await self._conn.commit()
 
@@ -165,7 +175,7 @@ class WebDatabase:
     async def add_message(self, session_id: str, role: str, content: str) -> str:
         """Add a message to a session. Returns message ID (UUID)."""
         msg_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now().isoformat()
 
         await self._conn.execute(
             "INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
@@ -177,8 +187,8 @@ class WebDatabase:
     async def get_messages(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Get messages for a session, most recent first."""
         cursor = await self._conn.execute(
-            f"SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT {limit}",
-            (session_id,)
+            "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?",
+            (session_id, limit)
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
