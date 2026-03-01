@@ -199,6 +199,18 @@ class MatrixConfig(Base):
     group_allow_from: list[str] = Field(default_factory=list)
     allow_room_mentions: bool = False
 
+class WebConfig(Base):
+    """Web channel configuration."""
+
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8080
+    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8080"])
+    allow_from: list[str] = Field(default_factory=list)  # Empty = allow registration
+    jwt_secret: str = "change-me-in-production"
+    db_path: str = "~/.nanobot/web_users.db"
+    session_ttl_days: int = 7
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -214,6 +226,7 @@ class ChannelsConfig(Base):
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
 
 class AgentDefaults(Base):
