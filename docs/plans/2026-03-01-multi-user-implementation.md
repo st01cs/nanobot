@@ -288,8 +288,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 async def init_database(db_path: str) -> None:
-    """Initialize database with schema."""
+    """Initialize database with complete schema including security features."""
     async with aiosqlite.connect(db_path) as db:
+        # Users table (core)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -299,12 +300,77 @@ async def init_database(db_path: str) -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_login TIMESTAMP,
                 status TEXT DEFAULT 'active',
-                quota_used INTEGER DEFAULT 0,
-                container_name TEXT,
-                container_port INTEGER,
                 subscription_tier TEXT DEFAULT 'free'
             )
         """)
+
+        # User encryption keys (security isolation)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_encryption_keys (
+                user_id TEXT PRIMARY KEY,
+                encrypted_uek BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # API keys storage (encrypted)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                encrypted_key BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                UNIQUE(user_id, provider)
+            )
+        """)
+
+        # Container status
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_containers (
+                user_id TEXT PRIMARY KEY,
+                container_name TEXT NOT NULL,
+                container_port INTEGER,
+                status TEXT NOT NULL,
+                last_activity TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # Quota usage (resource management)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_quota (
+                user_id TEXT PRIMARY KEY,
+                cpu_time_ms INTEGER DEFAULT 0,
+                memory_mb_seconds INTEGER DEFAULT 0,
+                storage_bytes INTEGER DEFAULT 0,
+                last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # Audit log (security monitoring)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id TEXT,
+                action TEXT NOT NULL,
+                resource TEXT,
+                success BOOLEAN,
+                ip_address TEXT,
+                details TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # Create indexes for performance
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_containers_status ON user_containers(status)")
+
         await db.commit()
 
 async def create_user(
@@ -352,6 +418,86 @@ async def get_user_by_username(db_path: str, username: str) -> Optional[Dict[str
             columns = [desc[0] for desc in cursor.description]
             return dict(zip(columns, row))
         return None
+
+# Security: Encryption key management
+async def create_user_encryption_key(db_path: str, user_id: str, encrypted_uek: bytes) -> None:
+    """Store user's encryption key (encrypted with master key)."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT INTO user_encryption_keys (user_id, encrypted_uek) VALUES (?, ?)",
+            (user_id, encrypted_uek)
+        )
+        await db.commit()
+
+async def get_user_encryption_key(db_path: str, user_id: str) -> Optional[bytes]:
+    """Retrieve user's encrypted encryption key."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT encrypted_uek FROM user_encryption_keys WHERE user_id = ?",
+            (user_id,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+# Security: API key storage
+async def store_api_key(db_path: str, user_id: str, provider: str, encrypted_key: bytes) -> None:
+    """Store encrypted API key for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO user_api_keys (user_id, provider, encrypted_key)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, provider, encrypted_key)
+        )
+        await db.commit()
+
+async def get_api_key(db_path: str, user_id: str, provider: str) -> Optional[bytes]:
+    """Retrieve encrypted API key."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT encrypted_key FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, provider)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+# Security: Audit logging
+async def create_audit_log(
+    db_path: str,
+    user_id: Optional[str],
+    action: str,
+    resource: str,
+    success: bool,
+    ip_address: str,
+    details: str = ""
+) -> None:
+    """Create an audit log entry."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO audit_log (user_id, action, resource, success, ip_address, details)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, action, resource, success, ip_address, details)
+        )
+        await db.commit()
+
+async def get_user_audit_logs(db_path: str, user_id: str, limit: int = 100) -> list:
+    """Get recent audit logs for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            """
+            SELECT * FROM audit_log
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (user_id, limit)
+        )
+        rows = await cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        return [dict(zip(columns, row)) for row in rows]
 ```
 
 **Step 4: Run test to verify it passes**
@@ -1100,9 +1246,664 @@ git commit -m "feat(multi-user): implement WebSocket connection routing"
 
 ---
 
-## Phase 6: Integration & Deployment (1 hour)
+## Phase 6: Security Implementation (1.5 hours)
 
-### Task 11: Create Docker Compose Configuration
+### Task 11: Implement Encryption Key Management
+
+**Files:**
+- Create: `services/multi-user/shared/encryption.py`
+- Test: `services/multi-user/tests/test_encryption.py`
+
+**Step 1: Write failing test for encryption key management**
+
+Create `services/multi-user/tests/test_encryption.py`:
+```python
+import pytest
+from shared.encryption import (
+    generate_user_encryption_key,
+    encrypt_user_encryption_key,
+    decrypt_user_encryption_key,
+    encrypt_api_key,
+    decrypt_api_key
+)
+
+def test_user_encryption_key_generation():
+    """Test generation and encryption of user keys."""
+    master_key = b"test_master_key_32_bytes_long!!!!"
+    uek = generate_user_encryption_key()
+    assert len(uek) == 44  # Fernet key length
+
+    encrypted = encrypt_user_encryption_key(uek, master_key)
+    assert encrypted != uek
+
+    decrypted = decrypt_user_encryption_key(encrypted, master_key)
+    assert decrypted == uek
+
+def test_api_key_encryption():
+    """Test API key encryption with user key."""
+    uek = generate_user_encryption_key()
+    api_key = "sk-test-api-key-12345"
+
+    encrypted = encrypt_api_key(api_key, uek)
+    assert encrypted != api_key
+
+    decrypted = decrypt_api_key(encrypted, uek)
+    assert decrypted == api_key
+```
+
+**Step 2: Run test to verify it fails**
+
+```bash
+cd services/multi-user
+pytest tests/test_encryption.py -v
+```
+Expected: `ImportError`
+
+**Step 3: Implement encryption module**
+
+Create `services/multi-user/shared/encryption.py`:
+```python
+from cryptography.fernet import Fernet
+import os
+
+def get_master_key() -> bytes:
+    """Get system master encryption key from environment."""
+    key = os.environ.get("MASTER_ENCRYPTION_KEY")
+    if not key:
+        raise ValueError("MASTER_ENCRYPTION_KEY environment variable not set")
+    return key.encode()
+
+def generate_user_encryption_key() -> bytes:
+    """Generate a unique encryption key for a user."""
+    return Fernet.generate_key()
+
+def encrypt_user_encryption_key(uek: bytes, master_key: bytes) -> bytes:
+    """Encrypt user encryption key with master key."""
+    master_cipher = Fernet(master_key)
+    return master_cipher.encrypt(uek)
+
+def decrypt_user_encryption_key(encrypted_uek: bytes, master_key: bytes) -> bytes:
+    """Decrypt user encryption key with master key."""
+    master_cipher = Fernet(master_key)
+    return master_cipher.decrypt(encrypted_uek)
+
+def encrypt_api_key(api_key: str, uek: bytes) -> bytes:
+    """Encrypt API key using user's encryption key."""
+    user_cipher = Fernet(uek)
+    return user_cipher.encrypt(api_key.encode())
+
+def decrypt_api_key(encrypted_key: bytes, uek: bytes) -> str:
+    """Decrypt API key using user's encryption key."""
+    user_cipher = Fernet(uek)
+    return user_cipher.decrypt(encrypted_key).decode()
+```
+
+**Step 4: Run test to verify it passes**
+
+```bash
+cd services/multi-user
+pytest tests/test_encryption.py -v
+```
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add services/multi-user/shared/encryption.py services/multi-user/tests/test_encryption.py
+git commit -m "feat(multi-user): implement encryption key management"
+```
+
+### Task 12: Implement Audit Logging System
+
+**Files:**
+- Create: `services/multi-user/shared/audit.py`
+- Create: `services/multi-user/shared/security_monitor.py`
+- Test: `services/multi-user/tests/test_audit.py`
+
+**Step 1: Write failing test for audit logging**
+
+Create `services/multi-user/tests/test_audit.py`:
+```python
+import pytest
+import asyncio
+from shared.audit import AuditLogger
+from shared.database import init_database
+
+@pytest.mark.asyncio
+async def test_audit_logging():
+    """Test audit log creation and retrieval."""
+    db_path = "/tmp/test_audit.db"
+    await init_database(db_path)
+
+    audit = AuditLogger(db_path)
+    await audit.log_user_action(
+        user_id="user_test",
+        action="LOGIN",
+        resource="auth",
+        success=True,
+        ip_address="192.168.1.1"
+    )
+
+    logs = await audit.get_user_logs("user_test", limit=1)
+    assert len(logs) == 1
+    assert logs[0]["action"] == "LOGIN"
+```
+
+**Step 2: Run test to verify it fails**
+
+```bash
+cd services/multi-user
+pytest tests/test_audit.py -v
+```
+Expected: `ImportError`
+
+**Step 3: Implement audit logger**
+
+Create `services/multi-user/shared/audit.py`:
+```python
+import logging
+import json
+from datetime import datetime
+from shared.database import create_audit_log
+
+class AuditLogger:
+    """Comprehensive audit logging system."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    async def log_user_action(
+        self,
+        user_id: str,
+        action: str,
+        resource: str,
+        success: bool,
+        ip: str,
+        details: dict = None
+    ):
+        """Record user action for audit."""
+        await create_audit_log(
+            self.db_path,
+            user_id=user_id,
+            action=action,
+            resource=resource,
+            success=success,
+            ip_address=ip,
+            details=json.dumps(details) if details else ""
+        )
+
+    async def log_container_event(
+        self,
+        user_id: str,
+        event_type: str,
+        container_id: str,
+        details: dict = None
+    ):
+        """Record container lifecycle event."""
+        await create_audit_log(
+            self.db_path,
+            user_id=user_id,
+            action=f"CONTAINER_{event_type}",
+            resource=f"container:{container_id}",
+            success=True,
+            ip_address="system",
+            details=json.dumps(details) if details else ""
+        )
+
+    async def log_security_event(
+        self,
+        event_type: str,
+        severity: str,
+        user_id: str = None,
+        details: dict = None
+    ):
+        """Record security-related event."""
+        await create_audit_log(
+            self.db_path,
+            user_id=user_id,
+            action=f"SECURITY_{event_type}",
+            resource="security",
+            success=(severity != "CRITICAL"),
+            ip_address="system",
+            details=json.dumps({
+                "severity": severity,
+                **(details or {})
+            })
+        )
+
+    async def get_user_logs(self, user_id: str, limit: int = 100):
+        """Retrieve audit logs for a user."""
+        from shared.database import get_user_audit_logs
+        return await get_user_audit_logs(self.db_path, user_id, limit)
+```
+
+**Step 4: Implement security monitoring**
+
+Create `services/multi-user/shared/security_monitor.py`:
+```python
+import time
+from collections import deque
+from shared.audit import AuditLogger
+
+class SecurityMonitor:
+    """Real-time security monitoring."""
+
+    def __init__(self, audit_logger: AuditLogger):
+        self.audit = audit_logger
+        self.request_history = {}  # user_id -> deque of timestamps
+        self.failed_logins = {}    # user_id -> count
+
+    async def check_rate_limit(
+        self,
+        user_id: str,
+        max_requests: int = 60,
+        window: int = 60
+    ) -> bool:
+        """Check if user exceeds rate limit."""
+        now = time.time()
+
+        if user_id not in self.request_history:
+            self.request_history[user_id] = deque()
+
+        # Clean old requests
+        while self.request_history[user_id] and \
+              self.request_history[user_id][0] < now - window:
+            self.request_history[user_id].popleft()
+
+        # Check limit
+        if len(self.request_history[user_id]) >= max_requests:
+            await self.audit.log_security_event(
+                "RATE_LIMIT_EXCEEDED",
+                "MEDIUM",
+                user_id,
+                {"requests": len(self.request_history[user_id])}
+            )
+            return False
+
+        self.request_history[user_id].append(now)
+        return True
+
+    async def check_failed_logins(self, user_id: str, max_attempts: int = 5) -> bool:
+        """Track failed login attempts."""
+        if user_id not in self.failed_logins:
+            self.failed_logins[user_id] = 0
+
+        self.failed_logins[user_id] += 1
+
+        if self.failed_logins[user_id] >= max_attempts:
+            await self.audit.log_security_event(
+                "MULTIPLE_FAILED_LOGINS",
+                "HIGH",
+                user_id,
+                {"attempts": self.failed_logins[user_id]}
+            )
+            return False
+
+        return True
+
+    async def reset_failed_logins(self, user_id: str):
+        """Reset counter after successful login."""
+        if user_id in self.failed_logins:
+            del self.failed_logins[user_id]
+
+    async def detect_anomalies(self, user_id: str) -> list:
+        """Detect suspicious behavior patterns."""
+        anomalies = []
+
+        if user_id in self.request_history:
+            recent_requests = len([
+                t for t in self.request_history[user_id]
+                if time.time() - t < 10
+            ])
+            if recent_requests > 100:
+                anomalies.append("HIGH_REQUEST_RATE")
+
+        if user_id in self.failed_logins and self.failed_logins[user_id] > 3:
+            anomalies.append("MULTIPLE_FAILED_LOGINS")
+
+        return anomalies
+```
+
+**Step 5: Run test to verify it passes**
+
+```bash
+cd services/multi-user
+pytest tests/test_audit.py -v
+```
+Expected: PASS
+
+**Step 6: Commit**
+
+```bash
+git add services/multi-user/shared/audit.py services/multi-user/shared/security_monitor.py services/multi-user/tests/test_audit.py
+git commit -m "feat(multi-user): implement audit logging and security monitoring"
+```
+
+### Task 13: Update Container Manager with Security Features
+
+**Files:**
+- Modify: `services/multi-user/container-manager/manager.py`
+
+**Step 1: Update container creation with security options**
+
+Modify `services/multi-user/container-manager/manager.py`:
+```python
+import docker
+from typing import Optional, Dict, Any
+import asyncio
+
+class ContainerManager:
+    """Manages Docker containers with enhanced security."""
+
+    def __init__(self):
+        self.client = docker.from_env()
+
+    async def create_container(
+        self,
+        user_id: str,
+        config_path: str
+    ) -> Dict[str, Any]:
+        """Create a secure container for user."""
+        container_name = f"nanobot-{user_id}"
+
+        # Run in thread pool to avoid blocking
+        container = await asyncio.to_thread(
+            self.client.containers.create,
+            image="nanobot:latest",
+            name=container_name,
+            user="nanobot:nanobot",  # Non-root user
+            volumes={
+                config_path: {"bind": "/root/.nanobot/config.json", "mode": "ro"},
+                f"{config_path}/../workspace": {"bind": "/root/.nanobot/workspace", "mode": "rw"}
+            },
+            ports={"18790/tcp": None},
+            detach=True,
+            # Security options
+            security_opt=[
+                "no-new-privileges",  # Prevent privilege escalation
+                "apparmor=docker-default",
+                "seccomp=default.json"
+            ],
+            cap_drop=["ALL"],  # Drop all capabilities
+            cap_add=["CHOWN", "DAC_OVERRIDE"],  # Add only necessary
+            read_only=True,  # Read-only root filesystem
+            tmpfs={
+                "/tmp": "rw,noexec,nosuid,size=100m",
+                "/run": "rw,noexec,nosuid,size=50m"
+            },
+            # Resource limits
+            mem_limit="512m",
+            memswap_limit="512m",
+            cpu_quota=100000,
+            cpu_period=100000,
+            pids_limit=100,  # Prevent fork bombs
+            # Labels for identification
+            labels={
+                "nanobot.user": user_id,
+                "nanobot.managed": "true"
+            }
+        )
+
+        return {
+            "id": container.id,
+            "name": container.name,
+            "status": "created"
+        }
+
+    async def start_container(self, user_id: str) -> Dict[str, Any]:
+        """Start user's container."""
+        container_name = f"nanobot-{user_id}"
+
+        container = await asyncio.to_thread(
+            self.client.containers.get,
+            container_name
+        )
+
+        await asyncio.to_thread(container.start)
+
+        # Get port mapping
+        container.reload()
+        port_info = container.ports.get("18790/tcp", [None])[0]
+
+        return {
+            "container_id": container.id,
+            "port": port_info["HostPort"] if port_info else None,
+            "status": "running"
+        }
+
+    async def check_container_security(self, container_id: str) -> dict:
+        """Perform security check on container."""
+        container = await asyncio.to_thread(
+            self.client.containers.get,
+            container_id
+        )
+        info = container.attrs
+
+        risks = []
+
+        # Check for privileged mode
+        if info["HostConfig"].get("Privileged", False):
+            risks.append("Running in privileged mode")
+
+        # Check for sensitive mounts
+        mounts = info.get("Mounts", [])
+        sensitive_paths = ["/", "/var/run/docker.sock", "/etc", "/proc"]
+        for mount in mounts:
+            if any(sp in mount.get("Source", "") for sp in sensitive_paths):
+                risks.append(f"Sensitive mount: {mount['Source']}")
+
+        # Check capabilities
+        caps = info["HostConfig"].get("CapAdd", [])
+        if caps and "ALL" in caps:
+            risks.append("Has ALL capabilities")
+
+        return {
+            "container_id": container_id,
+            "risks": risks,
+            "risk_level": "HIGH" if len(risks) > 2 else "MEDIUM" if len(risks) > 0 else "LOW"
+        }
+
+    # ... keep other methods unchanged ...
+```
+
+**Step 2: Commit**
+
+```bash
+git add services/multi-user/container-manager/manager.py
+git commit -m "feat(multi-user): enhance container security with hardening options"
+```
+
+### Task 14: Implement Backup and Recovery Scripts
+
+**Files:**
+- Create: `services/multi-user/scripts/backup.sh`
+- Create: `services/multi-user/scripts/restore.sh`
+- Create: `services/multi-user/scripts/backup.py`
+
+**Step 1: Create backup script**
+
+Create `services/multi-user/scripts/backup.sh`:
+```bash
+#!/bin/bash
+# Automated backup script for nanobot multi-user service
+
+set -e
+
+BACKUP_ROOT="/backup"
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="$BACKUP_ROOT/$DATE"
+RETENTION_DAYS=30
+
+mkdir -p "$BACKUP_DIR"
+
+echo "[$(date)] Starting backup..."
+
+# Backup database
+echo "Backing up database..."
+cp /data/database/users.db "$BACKUP_DIR/"
+cp /data/database/users.db-journal "$BACKUP_DIR/" 2>/dev/null || true
+
+# Backup user configurations
+echo "Backing up user configurations..."
+for user_dir in /data/users/*/; do
+    user_id=$(basename "$user_dir")
+    echo "  - $user_id"
+    tar -czf "$BACKUP_DIR/${user_id}_config.tar.gz" \
+        -C "$user_dir" config sessions 2>/dev/null || true
+done
+
+# Backup container metadata
+echo "Backing up container metadata..."
+docker ps --format "{{.Names}}" --filter "label=nanobot.user" > "$BACKUP_DIR/containers.txt"
+
+# Create manifest
+cat > "$BACKUP_DIR/manifest.json" <<EOF
+{
+  "backup_date": "$(date -Iseconds)",
+  "database": "users.db",
+  "users": $(ls /data/users/ 2>/dev/null | wc -l),
+  "containers": $(wc -l < "$BACKUP_DIR/containers.txt" 2>/dev/null || echo 0)
+}
+EOF
+
+# Compress
+echo "Compressing backup..."
+cd "$BACKUP_ROOT"
+tar -czf "${DATE}.tar.gz" "$DATE"
+rm -rf "$DATE"
+
+# Upload to S3 if configured
+if [ -n "$S3_BUCKET" ]; then
+    echo "Uploading to S3..."
+    aws s3 cp "${DATE}.tar.gz" "s3://$S3_BUCKET/nanobot/backups/"
+fi
+
+# Cleanup old backups
+echo "Cleaning old backups..."
+find "$BACKUP_ROOT" -name "*.tar.gz" -mtime +$RETENTION_DAYS -delete
+
+echo "[$(date)] Backup completed: ${DATE}.tar.gz"
+```
+
+**Step 2: Create restore script**
+
+Create `services/multi-user/scripts/restore.sh`:
+```bash
+#!/bin/bash
+# Restore script for nanobot multi-user service
+
+set -e
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <backup_date>"
+    echo "Example: $0 20260301_020000"
+    exit 1
+fi
+
+BACKUP_DATE="$1"
+BACKUP_FILE="/backup/${BACKUP_DATE}.tar.gz"
+RESTORE_TEMP="/tmp/restore_${BACKUP_DATE}"
+
+echo "[$(date)] Starting restore from $BACKUP_FILE..."
+
+# Extract backup
+echo "Extracting backup..."
+mkdir -p "$RESTORE_TEMP"
+tar -xzf "$BACKUP_FILE" -C "$RESTORE_TEMP"
+
+# Stop services
+echo "Stopping services..."
+cd /path/to/services/multi-user
+docker-compose down
+
+# Restore database
+echo "Restoring database..."
+mkdir -p /data/database
+cp "$RESTORE_TEMP/$BACKUP_DATE/users.db" /data/database/
+
+# Restore user data
+echo "Restoring user data..."
+for config_file in "$RESTORE_TEMP/$BACKUP_DATE"/*_config.tar.gz; do
+    if [ -f "$config_file" ]; then
+        user_id=$(basename "$config_file" _config.tar.gz)
+        echo "  - $user_id"
+        mkdir -p "/data/users/$user_id"
+        tar -xzf "$config_file" -C "/data/users/$user_id"
+    fi
+done
+
+# Restart services
+echo "Restarting services..."
+docker-compose up -d
+
+# Verify
+echo "Verifying restore..."
+sleep 10
+curl -f http://localhost/health || {
+    echo "ERROR: Health check failed!"
+    exit 1
+}
+
+# Cleanup
+rm -rf "$RESTORE_TEMP"
+
+echo "[$(date)] Restore completed successfully!"
+```
+
+**Step 3: Create Python backup helper**
+
+Create `services/multi-user/scripts/backup.py`:
+```python
+#!/usr/bin/env python3
+"""Python backup utilities with database integration."""
+
+import asyncio
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from shared.database import init_database, aiosqlite
+
+async def record_backup(db_path: str, backup_path: str):
+    """Record backup in database."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO audit_log (action, resource, success, ip_address, details)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("BACKUP_COMPLETE", backup_path, True, "system", f"Backup created at {backup_path}")
+        )
+        await db.commit()
+
+async def main():
+    db_path = "/data/database/users.db"
+    backup_path = sys.argv[1] if len(sys.argv) > 1 else "/backup/latest"
+
+    print(f"Recording backup: {backup_path}")
+    await record_backup(db_path, backup_path)
+    print("Backup recorded in audit log")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Step 4: Make scripts executable and commit**
+
+```bash
+chmod +x services/multi-user/scripts/backup.sh services/multi-user/scripts/restore.sh
+```
+
+```bash
+git add services/multi-user/scripts/
+git commit -m "feat(multi-user): add automated backup and recovery scripts"
+```
+
+---
+
+## Phase 7: Integration & Deployment (1 hour)
+
+### Task 15: Create Docker Compose Configuration
 
 **Files:**
 - Create: `services/multi-user/docker-compose.yml`
@@ -1189,7 +1990,7 @@ git add services/multi-user/docker-compose.yml services/multi-user/nginx/
 git commit -m "feat(multi-user): add Docker Compose configuration"
 ```
 
-### Task 12: Create Deployment Scripts
+### Task 16: Create Deployment Scripts
 
 **Files:**
 - Create: `services/multi-user/scripts/setup.sh`
@@ -1272,7 +2073,7 @@ git add services/multi-user/scripts/
 git commit -m "feat(multi-user): add deployment scripts"
 ```
 
-### Task 13: Create README and Documentation
+### Task 17: Create README and Documentation
 
 **Files:**
 - Create: `services/multi-user/README.md`
@@ -1387,9 +2188,9 @@ git commit -m "docs(multi-user): add comprehensive documentation"
 
 ---
 
-## Phase 7: Testing & Quality (30 minutes)
+## Phase 8: Testing & Quality (30 minutes)
 
-### Task 14: Add Integration Tests
+### Task 18: Add Integration Tests
 
 **Files:**
 - Create: `services/multi-user/tests/integration/test_full_flow.py`
@@ -1450,7 +2251,7 @@ git add services/multi-user/tests/integration/
 git commit -m "test(multi-user): add integration tests"
 ```
 
-### Task 15: Final Review and Cleanup
+### Task 19: Final Review and Cleanup
 
 **Files:**
 - Modify: `services/multi-user/.gitignore`
